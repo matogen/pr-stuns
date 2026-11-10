@@ -1,0 +1,28 @@
+# Credential store. Copy to users.yml (which is gitignored) and fill in.
+# config.yaml refers to these entries by name, so secrets live in one place.
+
+users:
+  # Referenced from a Bitbucket repo entry as `username: review-bot`
+  review-bot:
+    bitbucket:
+      email: bot@example.com          # Atlassian account email (needed with api_token)
+      api_token: your-atlassian-api-token
+      # app_password: legacy-app-password   # older alternative to api_token
+
+  # Referenced from a GitHub repo entry as `user: my-org`
+  my-org:
+    github:
+      token: your-github-token
+
+# Optional: ticket context. Repos pick an instance with
+# `jira_instance:` / `goby_instance:` in config.yaml (default: "default").
+jira:
+  default:
+    base_url: 'https://your-org.atlassian.net'
+    email: 'bot@example.com'
+    api_token: 'your-jira-api-token'
+
+goby:
+  default:
+    base_url: 'https://your-team.goby.chat'
+    api_key: 'gk_<publicId>_<secret>'   # scope: tasks:read

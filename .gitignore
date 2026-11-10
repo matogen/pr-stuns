@@ -1,0 +1,30 @@
+# Secrets and local configuration: never commit
+config.yaml
+config.yaml.*
+users.yml
+users.yml.*
+
+# Runtime state
+processed_prs/
+processed_prs*
+*.log
+*.log.*
+*.pid
+*.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+venv/
+.venv/
+.pytest_cache/
+.coverage
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

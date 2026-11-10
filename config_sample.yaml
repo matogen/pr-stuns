@@ -1,0 +1,189 @@
+# PR Review Bot Configuration
+
+repositories:
+  # GitHub repository configuration
+  - type: github
+    owner: username
+    repo: repository-name
+    token: your-github-token
+    username: your-github-username  # Username for watcher management
+
+    # Ticket context (optional). The reviewer pulls the ticket key from the PR
+    # branch name (feature/ops-42-thing -> OPS-42), fetches the ticket, and
+    # tells the model to check the diff against it. Instances are named in
+    # users.yml under `goby:` and `jira:`; both default to "default". Goby is
+    # tried first, then Jira.
+    goby_instance: default    # Goby team whose API key can read this repo's tasks
+    jira_instance: default    # Jira site this repo's tickets live on
+    remove_watcher: true      # Set to false if you want to stay as watcher
+    max_prs: 5                # Maximum number of PRs to process
+    pr_state: open            # PR state to filter by (open, closed, all)
+    pr_sort: created          # Sort by (created, updated, popularity)
+    pr_direction: desc        # Sort direction (asc, desc)
+    
+    # Repository-specific file exclusions
+    exclude_patterns:         # Files containing these patterns will be skipped
+      - "generated/"
+      - "dist/"
+      - "build/"
+      - ".vscode/"
+    exclude_extensions:       # Files with these extensions will be skipped
+      - ".pb.go"
+      - ".gen.ts"
+      - ".g.dart"
+      - "generated.cs"
+    exclude_regex:            # Files matching these regex patterns will be skipped
+      - ".*_test_helpers\\.go$"
+      - "src/generated/.*\\.js$"
+    
+    # Commit message filtering for subsequent reviews (after the first review)
+    commit_filtering:
+      review_trigger: "(REVIEW)"   # Only review PRs that have commits containing this text
+    
+    # Conversation tracking and duplicate comment prevention
+    conversation_tracking:
+      enabled: true                    # Enable conversation-aware reviews
+      max_history_days: 30            # How far back to look for previous comments
+      focus_on_changes: true          # Focus review on newly changed lines when previous comments exist
+      line_proximity_threshold: 5    # Consider comments "near" changes within N lines
+      trust_resolved_comments: true  # Trust platform's resolved status and developer responses
+      implicit_resolution: true      # Try to detect if issues were fixed in code changes
+
+  # GitLab repository configuration  
+  - type: gitlab
+    url: https://gitlab.example.com
+    project_id: 12345
+    token: your-gitlab-token
+    max_prs: 3                # Maximum number of MRs to process
+    pr_state: opened          # MR state to filter by (opened, closed, locked, merged)
+    pr_sort: created_at       # Sort by (created_at, updated_at)
+    
+    # Repository-specific file exclusions
+    exclude_patterns:         # Files containing these patterns will be skipped
+      - "auto-generated/"
+      - "vendor/"
+      - ".gitlab-ci/"
+    exclude_extensions:       # Files with these extensions will be skipped
+      - ".generated.rb"
+      - ".min.css"
+    
+    # Commit message filtering for subsequent reviews (after the first review)
+    commit_filtering:
+      review_trigger: "(REVIEW)"   # Only review PRs that have commits containing this text
+    
+    # Conversation tracking and duplicate comment prevention  
+    conversation_tracking:
+      enabled: true                    # Enable conversation-aware reviews
+      max_history_days: 30            # How far back to look for previous comments
+      focus_on_changes: true          # Focus review on newly changed lines when previous comments exist
+      line_proximity_threshold: 5    # Consider comments "near" changes within N lines
+      trust_resolved_comments: true  # Trust platform's resolved status and developer responses
+      implicit_resolution: true      # Try to detect if issues were fixed in code changes
+    
+  # Bitbucket repository configuration
+  - type: bitbucket
+    username: your-username
+    app_password: your-app-password
+    workspace: your-workspace
+    repo_slug: repository-slug
+    url: https://api.bitbucket.org/2.0  # Default Bitbucket Cloud URL
+    remove_watcher: true      # Set to false if you want to stay as watcher
+    max_prs: 5                # Maximum number of PRs to process
+    pr_state: OPEN            # PR state to filter by (OPEN, MERGED, DECLINED, SUPERSEDED)
+    pr_sort: created_on       # Sort by (created_on, updated_on)
+    
+    # Optional fallback users for rate limit handling
+    # When API rate limits are hit, the system will cycle through these users
+    fallback_users:
+      - username: fallback-user1
+        app_password: fallback-password1
+      - username: fallback-user2
+        app_password: fallback-password2
+    
+    # Commit message filtering for subsequent reviews (after the first review)
+    commit_filtering:
+      review_trigger: "(REVIEW)"   # Only review PRs that have commits containing this text
+    
+    # Conversation tracking and duplicate comment prevention
+    conversation_tracking:
+      enabled: true                    # Enable conversation-aware reviews
+      max_history_days: 30            # How far back to look for previous comments
+      focus_on_changes: true          # Focus review on newly changed lines when previous comments exist
+      line_proximity_threshold: 5    # Consider comments "near" changes within N lines
+      trust_resolved_comments: true  # Trust platform's resolved status and developer responses
+      implicit_resolution: true      # Try to detect if issues were fixed in code changes
+
+# LLM Configuration
+llm:
+  # Claude API configuration (recommended)
+  model_name: claude-opus-5-5           # Options: claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5
+  api_key: your-anthropic-api-key       # Or set ANTHROPIC_API_KEY environment variable
+  max_tokens: 8000                      # Maximum tokens in the response (leave room for thinking on Claude 5 models)
+  temperature: 0.3                      # Ignored for Claude 5 models, which reject sampling params
+  # Or route through OpenRouter instead:
+  # provider: openrouter
+  # model_name: x-ai/grok-4.7           # or anthropic/claude-sonnet-5.5, anthropic/claude-opus-5.5
+  system_prompt: |
+    You are an expert code reviewer working with competent intermediate to senior developers. Your goal is to provide high-value, minimal-noise feedback that respects developers' time and expertise.
+    
+    PR Context Analysis
+    Before reviewing individual files:
+    - Analyze the entire PR to understand the overall purpose and pattern of changes
+    - Identify common patterns of changes across multiple files
+    - Consider all commits in the PR, not just the most recent one
+    - Review any previous AI comments and developer responses to understand the conversation history
+    
+    Review Format
+    For each meaningful issue (not every file needs feedback):
+    - Issue ID: [High|Medium|Low] severity tag with concise description
+    - Location: File paths and line numbers affected
+    - Recommendation: Direct, actionable advice focusing only on significant improvements
+    - Code sample: When helpful, show minimal diffs with "+" and "-" prefixes
+    
+    Core Principles
+    - Consolidate related feedback: Group similar issues across multiple files instead of repeating
+    - Skip the obvious: Don't explain what the code does or compliment standard patterns
+    - Verify before claiming: Double-check usage of variables, functions, and dependencies before suggesting removal
+    - Quality over quantity: A few high-impact suggestions are better than many minor ones
+    - Consider implementation context: Only flag issues that make sense within the PR's purpose
+    - Be quiet by default: If you can't identify meaningful improvements, simply mark as "No significant issues found"
+    
+    Conversation Awareness (Critical)
+    When you receive previous AI review comments:
+    - DO NOT repeat issues marked as resolved or where developers indicated fixes
+    - Trust developer responses unless you see clear contradictory evidence in current code
+    - Focus exclusively on NEW issues not previously discussed
+    - If acknowledging resolved issues, be extremely brief (one line max)
+    - Prioritize fresh insights over rehashing old discussions
+    - Skip commenting on files where previous issues were adequately addressed and no new issues exist
+    
+    What to Prioritize
+    - Security vulnerabilities
+    - Performance bottlenecks
+    - Maintainability problems
+    - Logical errors
+    - API misuses
+    
+    What to Skip
+    - Minor style preferences
+    - Code that works appropriately
+    - Changes already addressed in earlier commits or previous review cycles
+    - Explanations of code the developer clearly understands
+    - Issues already discussed in previous AI comments (unless they persist)
+    
+    Remember: Developers value signal over noise. Your most valuable contribution is identifying NEW important issues they might have missed, not re-discussing resolved concerns. When in doubt about whether an issue was previously addressed, err on the side of not commenting.
+
+# Continuous Monitoring Configuration
+monitoring:
+  enabled: true                # Enable continuous monitoring
+  interval_minutes: 30         # Check for new PRs every 30 minutes
+  reset_processed_hours: 24    # Reset processed PRs every 24 hours to recheck them
+  max_runs: 0                  # 0 = run indefinitely, N = run N times and exit
+
+# Comment template
+comment_template: |
+  ### 🤖 AI Code Review
+  
+  {remarks}
+  
+  _This comment was generated automatically by an AI code review tool._
