@@ -27,7 +27,7 @@ Each run does the following for every repository in `config.yaml`:
 4. **Reviews each changed file** with the LLM, skipping binaries, lock files,
    generated code and anything matching your exclusion rules.
 5. **Posts comments** on the PR: findings are attached to the relevant file
-   and line where the model points at one, followed by one summary comment
+   and line where the model points at one, alongside one summary comment
    listing the files that need attention. If nothing was found, the summary
    simply says so.
 6. **Records the PR as processed** in `processed_prs/` so it is not reviewed
@@ -42,6 +42,8 @@ Things it does to stay useful rather than noisy:
 - **Ticket aware.** With Jira or Goby configured, the ticket is included in
   the prompt and the model is asked to flag a diff that clearly does not do
   what the ticket asks.
+- **Flow diagram.** Optionally adds a flowchart of the changed code to the
+  summary comment, as an image.
 - **Clean files are skipped.** A file the model has no remarks on gets no
   comment.
 
@@ -205,6 +207,40 @@ You can define several named instances and choose one per repository with
 missing key, unknown ticket or API error just means the review runs without
 ticket context.
 
+### Flow diagram (optional)
+
+PR Stuns can add a flowchart of the changed code to its summary comment, so a
+reviewer sees how control flows through the change before reading the diff.
+It is off by default and costs one extra LLM call per reviewed PR.
+
+```yaml
+flow_diagram:
+  enabled: true
+  mode: image                  # or: mermaid
+  renderer_url: https://mermaid.ink
+  max_nodes: 25
+```
+
+- `mode: image` posts the diagram as a picture. It works on Bitbucket, GitHub
+  and GitLab. Nothing is uploaded to your git host: the diagram text is
+  encoded into the image URL and drawn by the renderer when someone opens the
+  PR.
+- `mode: mermaid` posts a `mermaid` code block, which GitHub and GitLab draw
+  themselves. Bitbucket Cloud shows it as plain text, so use `image` there.
+
+A repository entry can switch it on or off for itself with
+`flow_diagram: true` / `false`, or override individual keys.
+
+**Privacy.** In image mode the diagram (function names and the shape of your
+logic, not the source code) is sent to `renderer_url`, which defaults to the
+public mermaid.ink service. For private code, run your own
+[mermaid.ink](https://github.com/jihchi/mermaid.ink) instance and set
+`renderer_url` to it, or use `mode: mermaid`.
+
+No diagram is posted when the change has no real control flow to draw (docs,
+config, renames), when the model's answer is not a valid flowchart, or when
+the diagram is too large to fit in an image URL.
+
 ### Comment template
 
 ```yaml
@@ -273,7 +309,7 @@ pr-reviewer --clean               # delete all tracking; everything is reviewed 
 ```
 pr_reviewer/
   __main__.py     command-line entry point
-  core/           the review loop, prompts, de-duplication, PR tracking
+  core/           the review loop, prompts, de-duplication, PR tracking, flow diagram
   clients/        Bitbucket, GitHub, GitLab, Jira and Goby API clients
   llm/            Claude, OpenRouter and dummy model backends
   config/         config.yaml and users.yml loading

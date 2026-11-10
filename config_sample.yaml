@@ -180,6 +180,17 @@ monitoring:
   reset_processed_hours: 24    # Reset processed PRs every 24 hours to recheck them
   max_runs: 0                  # 0 = run indefinitely, N = run N times and exit
 
+# Flow diagram (optional, off by default)
+# Adds a flowchart of the changed code to the summary comment. Costs one extra
+# LLM call per reviewed PR. A repository entry can override this block with
+# its own `flow_diagram:` (true/false, or a mapping with the same keys).
+flow_diagram:
+  enabled: false
+  mode: image                  # image  = picture rendered by renderer_url (works on Bitbucket, GitHub, GitLab)
+                               # mermaid = ```mermaid block, rendered by GitHub and GitLab themselves
+  renderer_url: https://mermaid.ink   # image mode only; point at your own mermaid.ink instance to keep diagrams in-house
+  max_nodes: 25                # upper bound on diagram size
+
 # Comment template
 comment_template: |
   ### 🤖 AI Code Review

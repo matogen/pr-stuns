@@ -107,6 +107,14 @@ class ConfigManager:
         """
         return self.users.get_goby_config(instance_name)
 
+    def get_flow_diagram_config(self) -> Any:
+        """Get the top-level `flow_diagram:` block (a mapping, a bool, or None).
+
+        See pr_reviewer.core.flow_diagram.resolve_flow_diagram_config for the
+        defaults and for how a repo entry overrides it.
+        """
+        return self.config.get('flow_diagram')
+
     def get_monitoring_config(self) -> Dict[str, Any]:
         """Get the monitoring configuration
         

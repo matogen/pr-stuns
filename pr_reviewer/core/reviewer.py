@@ -19,6 +19,7 @@ from pr_reviewer.llm import create_llm, BaseLLM
 from pr_reviewer.models import PullRequest, FileChange
 from pr_reviewer.utils.logging import logger
 from pr_reviewer.context.context_provider import ContextProvider
+from pr_reviewer.core.flow_diagram import generate_flow_diagram_section, resolve_flow_diagram_config
 
 # Cap how much full-file context goes into a single review prompt. A very
 # large file would bloat the prompt, slow the response, and risk a truncated
@@ -1047,7 +1048,22 @@ class PRReviewer:
             no_issues_message += "I've reviewed all changes in this PR and found no issues or concerns. "
             no_issues_message += "The code changes look good and can be merged. 👍"
             summary_remarks.append(no_issues_message)
-        
+
+        # Optional flow diagram of the changed code (off unless flow_diagram:
+        # is enabled). Best effort: a failure here never blocks the review.
+        try:
+            diagram_config = resolve_flow_diagram_config(
+                self.config.get_flow_diagram_config(), repo_config
+            )
+            diagram_section = generate_flow_diagram_section(
+                self.llm, pr_context_block, file_changes, diagram_config
+            )
+            if diagram_section:
+                summary_remarks.append(diagram_section)
+                logger.info(f"Added flow diagram to summary comment for PR #{pr.id}")
+        except Exception as e:
+            logger.warning(f"Error adding flow diagram for PR #{pr.id}: {e}")
+
         # Post the summary comment
         summary_body = "\n\n".join(summary_remarks)
         logger.info(f"Posting summary comment to PR #{pr.id} (length: {len(summary_body)})")
