@@ -697,5 +697,129 @@ class TestCleanFileIsNotRetried(TestCase):
         git_client.add_review_comment.assert_not_called()
         self.assertIn("No Issues Found", git_client.add_comment.call_args[0][1])
 
+class TestStructuredCommentFormat(TestCase):
+    """Each finding is a multi-paragraph comment (What / Why / Example /
+    Recommendation / Alternatives). The parser must keep all of it together."""
+
+    STRUCTURED_REVIEW = (
+        "[Line 12] **[Medium] Retry loop hides the real error**\n"
+        "\n"
+        "**What:** When all 3 retries fail, the function returns `None`.\n"
+        "\n"
+        "**Why it matters:** The caller thinks there is no data when the API is down.\n"
+        "\n"
+        "**Example:** The payment API times out 3 times and the page shows \"No invoices\".\n"
+        "\n"
+        "**Recommendation (how):** Re-raise the last error:\n"
+        "```diff\n"
+        "-    return None\n"
+        "\n"
+        "+    raise last_error\n"
+        "```\n"
+        "\n"
+        "**Alternatives:**\n"
+        "- Return a result object with an `error` field.\n"
+        "- Keep `None` but log it; on line 40: the caller would then need a check.\n"
+        "\n"
+        "[Line 30] **[High] SQL built by string concatenation**\n"
+        "\n"
+        "**What:** The user's input is pasted straight into the query.\n"
+        "\n"
+        "**Why it matters:** This looks fine in testing, but anyone can read other users' data.\n"
+        "\n"
+        "**Example:** Typing `' OR 1=1 --` as the name returns every row.\n"
+        "\n"
+        "**Recommendation (how):** Use a parameterised query.\n"
+        "\n"
+        "**Alternatives:**\n"
+        "- Use the ORM filter instead of raw SQL.\n"
+    )
+
+    def _make_reviewer(self):
+        from pr_reviewer.core.reviewer import PRReviewer
+
+        with patch("pr_reviewer.core.reviewer.ConfigManager") as mock_config_manager:
+            mock_config = MagicMock()
+            mock_config.get_llm_config.return_value = {"provider": "openrouter", "api_key": "test"}
+            mock_config.get_repositories.return_value = []
+            mock_config_manager.return_value = mock_config
+            return PRReviewer("dummy_config.yaml")
+
+    def test_each_finding_stays_one_whole_comment(self):
+        reviewer = self._make_reviewer()
+        comments = reviewer._extract_line_comments(self.STRUCTURED_REVIEW, {}, "src/app.py", {})
+
+        self.assertEqual([c["line"] for c in comments], [12, 30])
+        first, second = (c["body"] for c in comments)
+        for label in ("**What:**", "**Why it matters:**", "**Example:**",
+                      "**Recommendation (how):**", "**Alternatives:**"):
+            self.assertIn(label, first)
+            self.assertIn(label, second)
+        # The code sample (blank line inside the fence included) survives intact
+        self.assertIn("-    return None\n\n+    raise last_error", first)
+        # A line number mentioned in the prose is left alone, not stripped
+        self.assertIn("on line 40: the caller", first)
+        # The marker itself is not part of the posted body
+        self.assertTrue(first.startswith("**[Medium] Retry loop hides the real error**"))
+        self.assertNotIn("[Line 30]", first)
+        self.assertNotIn("Retry loop", second)
+
+    def test_marker_inside_code_fence_does_not_start_a_new_comment(self):
+        reviewer = self._make_reviewer()
+        review = (
+            "[Line 5] **[Low] Confusing log text**\n"
+            "\n"
+            "**Example:**\n"
+            "```\n"
+            "[Line 99] parse failed\n"
+            "```\n"
+        )
+        comments = reviewer._extract_line_comments(review, {}, "src/app.py", {})
+        self.assertEqual([c["line"] for c in comments], [5])
+        self.assertIn("[Line 99] parse failed", comments[0]["body"])
+
+    def test_legacy_single_paragraph_reviews_still_parse(self):
+        reviewer = self._make_reviewer()
+        review = (
+            "The retry loop on Line 12: swallows the final exception and returns None.\n"
+            "\n"
+            "(Line 30) The query is built by string concatenation, which allows injection."
+        )
+        comments = reviewer._extract_line_comments(review, {}, "src/app.py", {})
+        self.assertEqual([c["line"] for c in comments], [12, 30])
+
+    @patch("pr_reviewer.core.reviewer.ContextProvider")
+    def test_prompt_asks_for_the_layout_and_innocent_phrases_do_not_drop_findings(self, mock_context_provider):
+        from pr_reviewer.models import FileChange
+
+        mock_context_provider.return_value.get_file_context.return_value = {"filename": "src/app.py"}
+        reviewer = self._make_reviewer()
+        reviewer.llm = MagicMock()
+        # Contains "looks fine" in an explanation -- must not be read as "no issues"
+        reviewer.llm.analyze_code.return_value = self.STRUCTURED_REVIEW
+        reviewer.llm.last_finish_reason = "stop"
+        reviewer._get_ticket_context = MagicMock(return_value=None)
+        reviewer._filter_duplicate_comments_for_file = MagicMock(side_effect=lambda filename, new, existing: new)
+        reviewer.config.get_comment_template.return_value = "{remarks}"
+        reviewer.config.get_flow_diagram_config.return_value = None
+
+        git_client = MagicMock()
+        git_client.get_pull_request_comments.return_value = []
+        pr = MagicMock(id=1, title="t", description="", commits=[])
+        patch_text = "@@ -1,1 +1,40 @@\n line\n" + "".join(f"+added {i}\n" for i in range(39))
+        change = FileChange(filename="src/app.py", status="modified", patch=patch_text)
+
+        reviewer._analyze_and_comment(git_client, pr, [change], {})
+
+        prompt = reviewer.llm.analyze_code.call_args[0][0]
+        for label in ("**What:**", "**Why it matters:**", "**Example:**",
+                      "**Recommendation (how):**", "**Alternatives:**"):
+            self.assertIn(label, prompt)
+
+        posted = [str(c) for c in git_client.add_review_comment.call_args_list]
+        self.assertEqual(len(posted), 2, posted)
+        self.assertTrue(any("**Alternatives:**" in p and "Retry loop" in p for p in posted))
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

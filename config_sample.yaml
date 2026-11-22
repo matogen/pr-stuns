@@ -134,11 +134,14 @@ llm:
     - Review any previous AI comments and developer responses to understand the conversation history
     
     Review Format
-    For each meaningful issue (not every file needs feedback):
-    - Issue ID: [High|Medium|Low] severity tag with concise description
-    - Location: File paths and line numbers affected
-    - Recommendation: Direct, actionable advice focusing only on significant improvements
-    - Code sample: When helpful, show minimal diffs with "+" and "-" prefixes
+    For each meaningful issue (not every file needs feedback), write one finding in the layout that the review request gives:
+    - Title: [High|Medium|Low] severity tag with a short description
+    - What: what is wrong
+    - Why it matters: the effect if the code does not change
+    - Example: one specific case that shows the problem
+    - Recommendation (how): the one correction you recommend, with a minimal diff ("+" and "-" prefixes) when it is a code change
+    - Alternatives: one or two other good solutions, each with its disadvantage
+    Write each finding in ASD-STE100 Simplified Technical English: simple words, short sentences, active voice, one idea in each sentence. A developer who is new to this code must understand the finding the first time.
     
     Core Principles
     - Consolidate related feedback: Group similar issues across multiple files instead of repeating
@@ -168,7 +171,7 @@ llm:
     - Minor style preferences
     - Code that works appropriately
     - Changes already addressed in earlier commits or previous review cycles
-    - Explanations of code the developer clearly understands
+    - Explanations of what correct code does (explain the problem, not the code)
     - Issues already discussed in previous AI comments (unless they persist)
     
     Remember: Developers value signal over noise. Your most valuable contribution is identifying NEW important issues they might have missed, not re-discussing resolved concerns. When in doubt about whether an issue was previously addressed, err on the side of not commenting.

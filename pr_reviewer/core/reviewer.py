@@ -4,6 +4,7 @@ Core PR reviewer implementation.
 """
 
 import os
+import re
 import json
 import time
 import tempfile
@@ -39,6 +40,61 @@ NO_ISSUES_SENTINEL = "NO_ISSUES_FOUND"
 # finish_reason (OpenRouter) / stop_reason (Anthropic) values meaning the
 # model ran out of output budget mid-review.
 TRUNCATED_FINISH_REASONS = ("length", "max_tokens")
+
+# A finding starts with "[Line X]" (or "[General]") at the start of a line.
+# Everything up to the next marker is that finding's comment body. Tolerates a
+# list bullet / heading / bold wrapper in front, and "[Lines 12-15]" ranges
+# (the comment is attached to the first line).
+FINDING_MARKER_RE = re.compile(
+    r'^\s*(?:[-*+]\s+|#+\s*|\d+[.)]\s+)?(?P<open>\*\*|__)?'
+    r'\[(?:Lines?\s+(?P<line>\d+)(?:\s*[-\u2013]\s*\d+)?|(?P<general>General))\]'
+    r'(?P<close>\*\*|__)?\s*[:\-\u2013\u2014]?\s*',
+    re.IGNORECASE,
+)
+
+# How every finding must be written. Lives in code, not in the configurable
+# system prompt, because _extract_line_comments() depends on this layout.
+# The language rules are the ASD-STE100 (Simplified Technical English) writing
+# rules that apply to short review comments.
+COMMENT_FORMAT_INSTRUCTIONS = """
+### How to write each finding
+Write each finding as a separate block in this layout. Put the marker at the start of a line. The marker attaches the comment to the code.
+
+[Line X] **[High|Medium|Low] Short title of the problem**
+
+**What:** Tell the reader what is wrong. Use one or two sentences.
+
+**Why it matters:** Tell the reader what happens to the users or the team if the code does not change.
+
+**Example:** Give one specific case that shows the problem: an input, a sequence of events, or a short before/after. Use the real names from this code.
+
+**Recommendation (how):** Give the one correction that you recommend and tell the reader how to do it. If the correction is a code change, add a small ```diff block with + and - lines.
+
+**Alternatives:** Give one or two other good solutions. For each one, give its disadvantage in a few words. If there is no good alternative, write "None" and give the reason in a few words.
+
+Layout rules:
+- All five labelled parts are mandatory for each finding, in this sequence, with these labels.
+- X is the line number in the new version of the file. Write one finding in each block. Do not write [Line X] in other locations.
+- If a finding is not about one line (for example, a missing test file), use [General] as the marker.
+- Do not write an introduction, a summary, or praise before or after the findings.
+- Use a maximum of approximately 200 words for each finding.
+
+Language rules (ASD-STE100 Simplified Technical English):
+- Use simple, common words. Use each word with one meaning only, and use the same word for the same thing each time.
+- Write short sentences: a maximum of 20 words for an instruction and 25 words for a description.
+- Write one instruction or one idea in each sentence.
+- Use the active voice. Say who or what does the action.
+- Write instructions as commands ("Move the check before the loop.").
+- Use the simple present, simple past, or simple future tense. Do not use "-ing" verb forms if a simple tense is possible.
+- Do not use more than three nouns together.
+- Do not omit articles ("the", "a") or the word "that" to make a sentence shorter.
+- Do not use contractions, idioms, slang, or figures of speech.
+- Use a vertical list when you give more than two items or steps.
+- Use a maximum of six sentences in a paragraph.
+- Code identifiers and standard programming terms are technical names. Write them exactly. If a term is not common, explain it in a few words the first time.
+
+These rules control how you write a finding. They do not change which findings you report. Report only real, important problems. If there are none, reply with exactly NO_ISSUES_FOUND.
+"""
 
 
 class PRReviewer:
@@ -749,8 +805,9 @@ class PRReviewer:
                     )
                 
                 # Create a prompt with enhanced context and explicit line number instructions
-                analysis_prompt = "Review this code and provide detailed feedback with line numbers. "
+                analysis_prompt = "Review this code and provide feedback with line numbers. "
                 analysis_prompt += "For each issue you find, start with the specific line number that has the issue in the format: [Line X] "
+                analysis_prompt += "and write it in the layout given under 'How to write each finding' at the end of this message. "
                 analysis_prompt += "If you don't find any issues, respond with 'NO_ISSUES_FOUND'. "
                 analysis_prompt += "IMPORTANT: Be extremely careful about making definitive statements about code usage or behavior. "
 
@@ -874,7 +931,8 @@ class PRReviewer:
                 analysis_prompt += "\nPlease analyze the code changes considering the full context provided. "
                 analysis_prompt += "IMPORTANT: For each issue found, start your comment with the exact line number in [Line X] format. "
                 analysis_prompt += "Your assessment should consider how these changes interact with the rest of the file and related code. "
-                analysis_prompt += "Line numbers should refer to the new state of the file after changes."
+                analysis_prompt += "Line numbers should refer to the new state of the file after changes.\n"
+                analysis_prompt += COMMENT_FORMAT_INSTRUCTIONS
                 
                 # Use the enhanced context for analysis
                 context_obj = {"file_context": file_context}
@@ -891,7 +949,8 @@ class PRReviewer:
 
                 if status == "incomplete":
                     logger.warning(f"Incomplete response for {change.filename}. Retrying with a simpler prompt.")
-                    simple_prompt = "Review this code diff and specify line numbers in format [Line X]:\n\n"
+                    simple_prompt = "Review this code diff and specify line numbers in format [Line X].\n"
+                    simple_prompt += COMMENT_FORMAT_INSTRUCTIONS + "\n### Diff\n"
                     remarks = self.llm.analyze_code(simple_prompt + change.patch, change.filename)
                     status = self._classify_llm_response(remarks)
 
@@ -960,7 +1019,12 @@ class PRReviewer:
             remarks = initial_findings[change.filename]
             
             # Skip files where LLM found no issues
-            if not remarks or "NO_ISSUES_FOUND" in remarks or any(phrase in remarks.lower() for phrase in [
+            # The loose phrase check is only for free-form prose answers. A
+            # response with [Line X] findings is a real review: a phrase like
+            # "this looks fine in testing, but..." inside an explanation must
+            # not discard every finding for the file.
+            has_findings = bool(self._split_marked_findings(remarks or ""))
+            if not remarks or "NO_ISSUES_FOUND" in remarks or not has_findings and any(phrase in remarks.lower() for phrase in [
                 "no issues found", "no recommendations", "the code looks good", 
                 "no issues or recommendations", "no problems", "looks fine",
                 "no significant issues", "no significant changes", "no significant problems",
@@ -1296,9 +1360,31 @@ class PRReviewer:
             List of comment dictionaries with line number and body
         """
         comments = []
-        
+
+        # Preferred path: findings that start with a [Line X] / [General]
+        # marker. Each one is a multi-paragraph comment (What / Why / Example /
+        # Recommendation / Alternatives) and is kept whole.
+        marked_findings = self._split_marked_findings(remarks)
+        if marked_findings:
+            for line_number, comment_body in marked_findings:
+                if not comment_body:
+                    continue
+                shared_with = self._common_pattern_files(comment_body, filename, common_patterns)
+                if shared_with is not None:
+                    if shared_with[0] != filename:
+                        continue  # Already reported on the first file with this issue
+                    other_files = [f for f in shared_with if f != filename]
+                    if other_files:
+                        comment_body += f"\n\n*Note: This issue also appears in: {', '.join(other_files)}*"
+                comments.append({
+                    "line": line_number if line_number is not None else 1,
+                    "body": comment_body,
+                    "is_general": line_number is None
+                })
+            return comments
+
+        # Fallback for free-form answers without line-start markers.
         # Look for patterns like [Line X] or (Line X) or Line X:
-        import re
         line_patterns = [
             r'\[Line\s+(\d+)\]',  # [Line X]
             r'\(Line\s+(\d+)\)',  # (Line X)
@@ -1389,6 +1475,55 @@ class PRReviewer:
         
         return comments
     
+    @staticmethod
+    def _split_marked_findings(remarks: str) -> List[Tuple[Optional[int], str]]:
+        """Split a review into findings that start with a [Line X] / [General] marker.
+
+        A finding runs from its marker to the next marker, so blank lines,
+        labelled sections and code samples inside it stay together. Markers
+        inside a ``` code fence are ignored. Text before the first marker
+        (an introduction) is dropped.
+
+        Returns:
+            List of (line number, or None for [General]; comment body without
+            the marker). Empty if the review has no line-start markers.
+        """
+        findings: List[Tuple[Optional[int], List[str]]] = []
+        in_fence = False
+
+        for line in remarks.split('\n'):
+            if line.strip().startswith('```'):
+                in_fence = not in_fence
+            match = None if in_fence else FINDING_MARKER_RE.match(line)
+            if match:
+                rest = line[match.end():]
+                # "**[Line 5] Title**": keep the bold opener with the title
+                if match.group('open') and not match.group('close'):
+                    rest = match.group('open') + rest
+                line_number = int(match.group('line')) if match.group('line') else None
+                findings.append((line_number, [rest]))
+            elif findings:
+                findings[-1][1].append(line)
+
+        return [(line_number, '\n'.join(body).strip()) for line_number, body in findings]
+
+    @staticmethod
+    def _common_pattern_files(comment_body: str, filename: str,
+                              common_patterns: Dict[str, List[str]]) -> Optional[List[str]]:
+        """Return the files that share this finding, or None if it is unique.
+
+        common_patterns is keyed by normalized paragraphs that appear verbatim
+        in 2+ similar files. Only the title and the "What" paragraph identify
+        a finding; boilerplate such as an identical "Alternatives" line does not.
+        """
+        paragraphs = [p for p in comment_body.split('\n\n') if p.strip()]
+        identifying = paragraphs[:1] + [p for p in paragraphs[1:] if p.lstrip().lower().startswith('**what')]
+        for paragraph in identifying:
+            files = common_patterns.get(' '.join(paragraph.lower().split()))
+            if files and filename in files:
+                return files
+        return None
+
     def _get_existing_comments(self, git_client: BaseRepoClient, pr_id: Any) -> List[Dict[str, Any]]:
         """Get existing comments on a pull request, normalized for duplicate-comment checks.
 
